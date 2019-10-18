@@ -1,0 +1,41 @@
+systemd-notify-sync is a mostly drop-in replacement for systemd-notify
+that ensures that the notification being sent to systemd is actually
+received before exiting.
+
+The systemd-notify program, along with the sd_notify C API it wraps,
+has a well-known race condition [1] [2]. Basically, sd_notify sends a
+unix-domain datagram to the systemd notification socket saying "Here's
+my update! And by the way, my pid is X" [3]. When systemd receives
+this message, it looks up the control group hosting X, figures out
+which systemd unit owns that control group, and updates that unit's
+status according to whatever update sd_notify sent. The problem is
+that message delivery is async: if process X dies before systemd gets
+around to processing the notification it sent, its lookup of the
+cgroup for X fails, and systemd ends up ignoring the
+notification update.
+
+The systemd-notify-sync program uses a trick to ensure reliable
+delivery of systemd notifications. Instead of sending *one*
+notification, systemd-notify-sync sends two: first, it sends the
+notification specified on the systemd-notify-sync command line;
+second, it sends a dummy notification for synchronization. We staple
+the write side of a pipe to the second notification and use the read
+side of the pipe "fence" [4]; the read side of the pipe signals EOF
+once systemd has read and processed the second notification. Because
+systemd is a single-threaded program and processes notification
+datagrams in-order, we know that when our "fence" signals, systemd has
+finished processing our first notification packet.
+
+We use a second notification instead of stapling the pipe FD to the
+first notification to ensure that we don't fail if systemd closes
+extra FDs before looking up the sender of the message. It doesn't do
+that now, but it could in the future. Using a second notification with
+a dummy payload also ensures that we don't accidentally store the pipe
+FD if the user passes FDSTORE=1 on the systemd-notify-sync
+command line.
+
+[1] https://github.com/systemd/systemd/issues/2739
+[2] https://github.com/systemd/systemd/issues/2737
+[3] The PID attestation is done using SCM_CREDENTIALS and so can't be forged
+    except by CAP_SYS_ADMIN (i.e., almost always root) processes.
+[4] https://www.khronos.org/opengl/wiki/Sync_Object#Fence

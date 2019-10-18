@@ -1,0 +1,94 @@
+#!/usr/bin/python3
+import os
+import sys
+from array import array
+import signal
+import argparse
+from socket import (
+    AF_UNIX,
+    SCM_CREDENTIALS,
+    SCM_RIGHTS,
+    SOCK_DGRAM,
+    SOL_SOCKET,
+    socket,
+)
+
+def lookup_user(uid):
+    import pwd
+    try:
+        info = pwd.getpwnam(uid)
+    except KeyError:
+        info = pwd.getpwuid(uid)
+    return info.pw_uid, info.pw_gid
+
+def main(argv):
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+    p = argparse.ArgumentParser(
+        description="dancol's bugfixed systemd-notify")
+    p.add_argument("--uid",
+                   metavar="USER",
+                   help="Set user to send from")
+    p.add_argument("--pid",
+                   metavar="PID",
+                   nargs="?",
+                   const=True)
+    p.add_argument("--status",
+                   metavar="TEXT",
+                   help="Set status text")
+    p.add_argument("--ready",
+                   action="store_true",
+                   help="Inform the init system about service "
+                   "start-up completion")
+    p.add_argument("assignments",
+                   nargs="*",
+                   help="Variable assignments: see "
+                   "`man 3 sd_notify`")
+    args = p.parse_args(argv)
+
+    sock = socket(AF_UNIX, SOCK_DGRAM, 0)
+    pid = os.getpid()
+    uid = os.getuid()
+    gid = os.getgid()
+    assignments = []
+
+    if args.pid is not None:
+        if args.pid is True:
+            pid = os.getppid()
+        else:
+            pid = int(args.pid)
+        assignments.append("MAINPID={}".format(pid))
+    if args.uid is not None:
+        uid, gid = lookup_user(args.uid)
+    if args.status is not None:
+        assignments.append("STATUS={}".format(args.status))
+    if args.ready:
+        assignments.append("READY=1")
+
+    assignments.extend(args.assignments)
+    for assignment in assignments:
+        if "\n" in assignment:
+            print("ERROR: invalid assignment:", repr(assignment),
+                  file=sys.stderr)
+            return 1
+
+    notify_socket_name = os.environ["NOTIFY_SOCKET"]
+    if notify_socket_name.startswith("@"):
+        notify_socket_name = "\0" + notify_socket_name[1:]
+
+    def _send_msg(payload, fds):
+        ancdata = [
+            (SOL_SOCKET, SCM_RIGHTS, array("i", fds)),
+            (SOL_SOCKET, SCM_CREDENTIALS, array("i", [pid, uid, gid])),
+        ]
+        sock.sendmsg([payload.encode("UTF-8")],
+                     ancdata, 0, notify_socket_name)
+
+    _send_msg("\n".join(assignments), [])
+    pipe_r, pipe_w = os.pipe()
+    _send_msg(" ", [pipe_w])
+    os.close(pipe_w)
+    os.read(pipe_r, 1)
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
