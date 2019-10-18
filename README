@@ -9,10 +9,10 @@ my update! And by the way, my pid is X" [3]. When systemd receives
 this message, it looks up the control group hosting X, figures out
 which systemd unit owns that control group, and updates that unit's
 status according to whatever update sd_notify sent. The problem is
-that message delivery is async: if process X dies before systemd gets
-around to processing the notification it sent, its lookup of the
-cgroup for X fails, and systemd ends up ignoring the
-notification update.
+that message delivery is asynchronous: if process X dies before
+systemd gets around to processing the notification that X sent,
+systemd's lookup of the cgroup for X fails, and systemd ends up
+ignoring the message.
 
 The systemd-notify-sync program uses a trick to ensure reliable
 delivery of systemd notifications. Instead of sending *one*
